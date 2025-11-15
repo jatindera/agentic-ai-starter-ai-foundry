@@ -1,37 +1,33 @@
 import pyodbc
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from app.db.connection import get_connection_params, build_local_sql_token
 from app.db.config import db_settings
-from app.db.connection import get_access_token
+import os
 
-SQL_COPT_SS_ACCESS_TOKEN = 1256  # ODBC token key
+SQL_COPT_SS_ACCESS_TOKEN = 1256
+ENVIRONMENT = os.getenv("ENVIRONMENT", "LOCAL").upper()
 
 
 def get_sync_connection():
-    token_bytes = get_access_token()
+    conn_str = get_connection_params()
 
-    conn_str = (
-        f"DRIVER={{{db_settings.ODBC_DRIVER}}};"
-        f"SERVER=tcp:{db_settings.AZURE_SQL_SERVER},1433;"
-        f"DATABASE={db_settings.AZURE_SQL_DATABASE};"
-        f"Encrypt=yes;"
-        f"TrustServerCertificate=no;"
-        f"Authentication=ActiveDirectoryAccessToken;"
-    )
+    if ENVIRONMENT == "AZURE":
+        # Inside Azure — Managed Identity
+        return pyodbc.connect(conn_str)
 
-    return pyodbc.connect(
-        conn_str,
-        attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_bytes}
-    )
+    # LOCAL — need the AD token
+    token_struct = build_local_sql_token()
+    return pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
 
 
 sync_engine = create_engine(
     "mssql+pyodbc://",
     creator=get_sync_connection,
-    pool_size=5,
-    max_overflow=10,
-    echo=False,
+    pool_size=10,
+    max_overflow=20,
     fast_executemany=True,
+    echo=False,
 )
 
 SessionLocal = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False)

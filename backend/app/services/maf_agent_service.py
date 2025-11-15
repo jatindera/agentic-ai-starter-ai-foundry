@@ -1,48 +1,74 @@
 import os
-from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework import ChatMessage, TextContent, Role
-from azure.identity.aio import AzureCliCredential
-from app.services.agent_provision_service import AgentProvisionService
+from dotenv import load_dotenv
 
-PROJECT_ENDPOINT = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
+from app.services.agent_provision_service import AgentProvisionService
+from app.services.azure_foundry_client import AzureFoundryClient
+
+load_dotenv()
 
 
 class MAF_AgentService:
-    """Production-ready MAF agent wrapper (latest agent-framework)."""
+    """
+    Production-ready, lazy-agent Azure Foundry wrapper.
+    - Creates agent only once (stored in DB)
+    - Creates a thread per conversation
+    - Sends message → runs agent → reads response
+    """
 
     def __init__(self):
         self.provision_service = AgentProvisionService()
         self.agent_name = "chat-agent"
         self.instructions = "You are a helpful AI assistant."
 
-    async def get_agent(self):
-        """Return the Azure Foundry agent ID, creating the agent if needed."""
-        agent_id = await self.provision_service.get_or_create_agent(
-            agent_name=self.agent_name,
+    async def get_agent(self) -> str:
+        """
+        Lazy-creates agent if not existing.
+        Always returns Foundry agent ID.
+        """
+        return await self.provision_service.get_or_create_agent(
+            name=self.agent_name,
             instructions=self.instructions
         )
-        return agent_id
 
     async def get_response(self, message: str) -> str:
+        """
+        Sends a user message to Foundry agent and returns reply.
+        """
+        # 1. Ensure agent exists
         agent_id = await self.get_agent()
 
-        async with AzureCliCredential() as credential:
+        # 2. Get Foundry project client (centralized)
+        client = await AzureFoundryClient.get_client()
 
-            # Create Chat Client (this replaces ChatAgent)
-            chat_client = AzureOpenAIChatClient(
-                credential=credential,
-                project_endpoint=PROJECT_ENDPOINT,
-                agent_id=agent_id
-            )
+        # 3. Create thread
+        thread = await client.agents.threads.create()
 
-            # Build message
-            chat_message = ChatMessage(
-                role=Role.USER,
-                contents=[TextContent(text=message)],
-            )
+        # 4. Add user message
+        await client.agents.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=message,
+        )
 
-            # Invoke agent
-            result = await chat_client.run(chat_message)
+        # 5. Execute agent
+        run = await client.agents.runs.create_and_process(
+            thread_id=thread.id,
+            agent_id=agent_id
+        )
 
-            # Return final text
-            return result.text if hasattr(result, "text") else ""
+        if run.status == "failed":
+            return f"Agent failed: {run.last_error}"
+
+        # 6. Retrieve messages (ASC → last message is agent reply)
+        messages = client.agents.messages.list(
+            thread_id=thread.id,
+            order="asc"
+        )
+
+        final_text = ""
+
+        async for m in messages:
+            if getattr(m, "text_messages", None):
+                final_text = m.text_messages[-1].text.value
+
+        return final_text

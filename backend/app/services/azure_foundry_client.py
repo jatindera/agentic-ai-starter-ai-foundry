@@ -1,38 +1,36 @@
 import os
-from azure.identity.aio import AzureCliCredential
 from azure.ai.projects.aio import AIProjectClient
+from azure.identity.aio import DefaultAzureCredential
 from dotenv import load_dotenv
 
 load_dotenv()
 
 PROJECT_ENDPOINT = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
-MODEL_DEPLOYMENT = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+MODEL = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+
 
 class AzureFoundryClient:
-    """Client wrapper for Azure AI Foundry."""
+    _client = None
+    _credential = None
 
-    @staticmethod
-    async def list_agents():
-        async with AzureCliCredential() as credential:
-            async with AIProjectClient(
-                endpoint=PROJECT_ENDPOINT,
-                credential=credential
-            ) as project_client:
-                agents = await project_client.agents.list_agents()
-                return agents, project_client
+    @classmethod
+    async def get_client(cls) -> AIProjectClient:
+        if cls._client:
+            return cls._client
 
-    @staticmethod
-    async def create_agent(agent_name: str, instructions: str):
-        async with AzureCliCredential() as credential:
-            async with AIProjectClient(
-                endpoint=PROJECT_ENDPOINT,
-                credential=credential
-            ) as project_client:
+        cls._credential = DefaultAzureCredential()
+        cls._client = AIProjectClient(
+            endpoint=PROJECT_ENDPOINT,
+            credential=cls._credential
+        )
+        return cls._client
 
-                created_agent = await project_client.agents.create_agent(
-                    model=MODEL_DEPLOYMENT,
-                    name=agent_name,
-                    instructions=instructions,
-                )
+    @classmethod
+    async def create_agent(cls, name: str, instructions: str):
+        client = await cls.get_client()
 
-                return created_agent, project_client
+        return await client.agents.create_agent(
+            model=MODEL,
+            name=name,
+            instructions=instructions
+        )
