@@ -24,7 +24,7 @@ anthropic==0.72.1
 anyio==4.11.0
 attrs==25.4.0
 azure-ai-agents==1.2.0b5
-azure-ai-projects==2.0.0b1
+azure-ai-projects==1.0.0b12
 azure-core==1.36.0
 azure-functions==1.24.0
 azure-functions-durable==1.4.0
